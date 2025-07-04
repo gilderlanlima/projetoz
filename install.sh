@@ -8,6 +8,23 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}Iniciando a instalação do ProjetoZ...${NC}"
 
+# --- Validação de argumentos ---
+if [ "$#" -ne 3 ]; then
+    echo -e "${RED}Uso: sudo bash -s <frontend_url> <backend_url> <admin_email>${NC}"
+    echo -e "${RED}Exemplo: sudo bash -s crm.meuprojeto.com crm-bk.meuprojeto.com contato@meuprojeto.com${NC}"
+    exit 1
+fi
+
+FRONTEND_URL="$1"
+BACKEND_URL="$2"
+ACME_EMAIL="$3"
+
+echo -e "${YELLOW}Configurações recebidas:${NC}"
+echo -e "${YELLOW}Frontend URL: ${FRONTEND_URL}${NC}"
+echo -e "${YELLOW}Backend URL: ${BACKEND_URL}${NC}"
+echo -e "${YELLOW}Email ACME: ${ACME_EMAIL}${NC}"
+sleep 2
+
 # --- Limpeza de instalações anteriores ---
 echo -e "${YELLOW}Verificando e removendo instalações Docker anteriores do ProjetoZ...${NC}"
 
@@ -37,27 +54,6 @@ fi
 
 echo -e "${GREEN}Limpeza concluída.${NC}"
 sleep 2
-
-# --- Perguntar ao usuário pelos detalhes ---
-echo -e "${YELLOW}Por favor, insira os detalhes para a configuração do ProjetoZ:${NC}"
-
-read -p "$(echo -e "${GREEN}Digite o DOMÍNIO DO FRONTEND (ex: crm.seusite.com): ${NC}")" FRONTEND_URL
-if [ -z "$FRONTEND_URL" ]; then
-    echo -e "${RED}Erro: O domínio do Frontend não pode ser vazio. Saindo.${NC}"
-    exit 1
-fi
-
-read -p "$(echo -e "${GREEN}Digite o DOMÍNIO DO BACKEND (ex: crm-bk.seusite.com): ${NC}")" BACKEND_URL
-if [ -z "$BACKEND_URL" ]; then
-    echo -e "${RED}Erro: O domínio do Backend não pode ser vazio. Saindo.${NC}"
-    exit 1
-fi
-
-read -p "$(echo -e "${GREEN}Digite seu ENDEREÇO DE E-MAIL para o Let's Encrypt (ex: contato@seusite.com): ${NC}")" ACME_EMAIL
-if [ -z "$ACME_EMAIL" ]; then
-    echo -e "${RED}Erro: O e-mail não pode ser vazio. Saindo.${NC}"
-    exit 1
-fi
 
 # --- Clonar o repositório ---
 echo -e "${YELLOW}Clonando o repositório do ProjetoZ para /root/projetoz...${NC}"
@@ -108,19 +104,29 @@ echo -e "${YELLOW}Configurando docker-compose-acme.yaml para os domínios inform
 # Cria um backup do docker-compose-acme.yaml original antes de modificar
 cp docker-compose-acme.yaml docker-compose-acme.yaml.bak
 
-# Garante que as variáveis de ambiente VIRTUAL_HOST e LETSENCRYPT_HOST sejam aplicadas
-# diretamente no docker-compose-acme.yaml para nginx-proxy e acme-companion
-# Nota: O uso de env_file ou environment diretamente no docker-compose é mais robusto
-# para VIRTUAL_HOST/LETSENCRYPT_HOST do que depender de .env externo para esses valores.
+# Insere as variáveis de ambiente VIRTUAL_HOST e LETSENCRYPT_HOST diretamente no serviço nginx-proxy
+# e DEFAULT_EMAIL para acme-companion no docker-compose-acme.yaml
+# Isso é mais robusto do que depender de .env externo para esses valores em tempo de execução do compose.
 
-# Modifica o docker-compose-acme.yaml para incluir as variáveis VIRTUAL_HOST e LETSENCRYPT_HOST
-# para os serviços que precisam de SSL.
-# Para nginx-proxy
-sed -i "/container_name: ticketz-nginx-proxy/a\ \ \ \ environment:\n      - VIRTUAL_HOST=${FRONTEND_URL},${BACKEND_URL}\n      - LETSENCRYPT_HOST=${FRONTEND_URL},${BACKEND_URL}" docker-compose-acme.yaml
+# Usar um método mais seguro e menos propenso a erros de sed para adicionar blocos
+# Temporary file for modified compose
+TEMP_COMPOSE_FILE=$(mktemp)
 
-# Para acme-companion
-sed -i "/container_name: ticketz-acme-companion/a\ \ \ \ environment:\n      - DEFAULT_EMAIL=${ACME_EMAIL}" docker-compose-acme.yaml
+# Read original compose file line by line
+while IFS= read -r line; do
+    echo "$line" >> "$TEMP_COMPOSE_FILE"
+    if [[ "$line" =~ "container_name: ticketz-nginx-proxy" ]]; then
+        echo "      environment:" >> "$TEMP_COMPOSE_FILE"
+        echo "        - VIRTUAL_HOST=${FRONTEND_URL},${BACKEND_URL}" >> "$TEMP_COMPOSE_FILE"
+        echo "        - LETSENCRYPT_HOST=${FRONTEND_URL},${BACKEND_URL}" >> "$TEMP_COMPOSE_FILE"
+    elif [[ "$line" =~ "container_name: ticketz-acme-companion" ]]; then
+        echo "      environment:" >> "$TEMP_COMPOSE_FILE"
+        echo "        - DEFAULT_EMAIL=${ACME_EMAIL}" >> "$TEMP_COMPOSE_FILE"
+    fi
+done < docker-compose-acme.yaml
 
+# Replace original with modified
+mv "$TEMP_COMPOSE_FILE" docker-compose-acme.yaml
 
 echo -e "${GREEN}docker-compose-acme.yaml configurado.${NC}"
 
